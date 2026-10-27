@@ -28,17 +28,19 @@ Work iteratively: test and refine after a few tests rather than waiting until th
 ### Window and layout
 
 - Open a new window using the title defined in `config/RobGPT_config.json`.
-- Place two textboxes in the center of the window:
-  - Upper textbox for the model's reply.
-  - Lower textbox for the user's input.
-  - Read both labels from `config/RobGPT_config.json`.
+- Place three textboxes in the center of the window:
+  - Model reply with a vertical scrollbar.
+  - Current message with Send at its top right.
+  - Editable Previous message with Repeat with different settings at its top right.
+  - Read labels and textbox heights from `config/RobGPT_config.json`.
+- After a successful or token-limited Send, copy Current message to Previous message and clear Current message. Other failures preserve both boxes.
 - Display relatively large emojis in a box at the top right of the window.
 - Have the model choose emojis based on the current user's interaction.
-- Offer radio buttons for the configured response formats. Format selection applies to new Send requests and is disabled after the interaction limit; Repeat retains the original format.
+- Offer radio buttons for the configured response formats. Format selection applies to Send and Repeat and remains available after the interaction limit for Repeat.
 - Place the parameter sliders and vertically arranged format radio buttons in a right-hand controls panel; keep conversation textboxes on the left. Panel width and window dimensions are defined in the app configuration. The header and statistics span both columns.
 - Display a countdown of the remaining questions in a box, preferably on the left.
 - Provide sliders for temperature, Top P (a probability fraction), and maximum output tokens. Their labels, defaults, bounds, and steps are defined only in `model_parameters` in `config/RobGPT_config.json`.
-- Provide a Repeat button whose label is defined in the app configuration. It is disabled until a request has succeeded.
+- Provide a Repeat button whose label is defined in the app configuration. It is disabled until a request has succeeded or reached its token limit.
 - Display account balance availability, latest input/output tokens, reported session input/output token totals, missing-usage call count, latest request duration, Send/Repeat counts, success/failure counts, and whether the latest generation hit its token limit. Do not display estimated cost or last-used parameters.
 
 ### Conversation
@@ -62,11 +64,11 @@ Work iteratively: test and refine after a few tests rather than waiting until th
 
 - Apply the current slider values to both Send and Repeat requests; initialize them from the configured defaults.
 - Temperature and Top P bounds follow the [OpenAI Chat Completions API](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create); the token slider uses the user-requested bounds recorded in configuration.
-- Repeat resends the exact latest successful system/user message pair, including its original continuation instruction when applicable. Do not choose a new realm, re-render with a newly selected format, decrement the counter, or include unsubmitted input text. Format changes affect the next Send, not Repeat.
-- A successful new Send replaces the saved pair; failed sends/repeats preserve it and the counter. Repeat keeps any unsubmitted draft intact.
+- Repeat regenerates the latest successful or token-limited request using the selected format and current sliders. Use the editable Previous message text; preserve the original realm and continuation/final status. Re-render the system template with that realm and the selected format; do not decrement the counter or include the unsubmitted Current message draft.
+- A successful new Send replaces the saved pair; failed sends/repeats preserve it and the counter. Repeat keeps the Current message draft intact and leaves Previous message editable, including after the final interaction.
 - Repeat remains available after the final interaction and preserves the final farewell behavior without consuming another interaction.
 - One Send or Repeat makes one model invocation returning both reply and emoji. Disable request controls while it runs and restore them appropriately afterward.
-- The maximum-token value limits the generated structured response, including JSON and emoji, rather than just the visible reply. If the limit causes truncation/parsing failure, show the usual error and preserve the counter.
+- The maximum-token value limits the generated structured response, including JSON and emoji, rather than just the visible reply. If the token limit is reached, display any recoverable partial reply with “Maxtokens reached. Response incomplete” and preserve the counter.
 
 ### Statistics and provider balance
 
@@ -163,5 +165,5 @@ Inject the structured model and random chooser into conversation logic so unit t
 ## Template and format verification
 
 - Offline tests cover loading the single template and moved starters, blank/missing realms, required/unknown variables, all configured format choices, per-Send realm selection, exact replay, and radio-button forwarding.
-- A hidden real-Tk smoke check passed with the actual project resources and a fake model: configured format selection renders correctly, and changing it does not alter Repeat's saved prompt or question count.
+- A hidden real-Tk smoke check passed with the actual project resources and a fake model: configured format selection renders correctly, and changing it updates Repeat's format while preserving the saved realm, user message, and question count.
 - No live API calls are needed for this change; gateway access was last reported as locked out.

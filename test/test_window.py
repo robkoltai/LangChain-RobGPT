@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from unit_helpers import app_settings
-from scripts.conversation import Reaction, EmptyMessageError, ModelResponseError, SessionStatistics
+from scripts.conversation import Reaction, EmptyMessageError, ModelResponseError, SessionStatistics, TokenLimitResponse
 from scripts.settings import GenerationParameterError
 from scripts.window import Window
 
@@ -21,12 +21,16 @@ class WindowTest(unittest.TestCase):
         widgets_patch = patch("scripts.window.tk")
         self.widgets = widgets_patch.start()
         self.addCleanup(widgets_patch.stop)
-        self.widgets.Text.side_effect = [Mock(), Mock()]
-        self.widgets.Label.side_effect = [Mock() for _ in range(7)]
+        themed_patch = patch("scripts.window.ttk")
+        self.themed_widgets = themed_patch.start()
+        self.addCleanup(themed_patch.stop)
+        self.widgets.Text.side_effect = [Mock(), Mock(), Mock()]
+        self.widgets.Label.side_effect = [Mock() for _ in range(8)]
         self.widgets.Button.side_effect = [Mock(), Mock()]
         self.widgets.Scale.side_effect = [Mock() for _ in self.config["model_parameters"]]
-        self.widgets.Radiobutton.side_effect = [Mock() for _ in self.config["requested_formats"]]
+        self.themed_widgets.Radiobutton.side_effect = [Mock() for _ in self.config["requested_formats"]]
         self.window = Window(self.config, self.conversation, self.root)
+        self.window.previous_message_box.get.return_value = "Edited previous message"
         self.window.format_var.get.return_value = self.config["requested_formats"][self.config["default_format_index"]]
         for name, slider in self.window.parameter_sliders.items():
             slider.get.return_value = self.config["model_parameters"][name]["default"]
@@ -46,6 +50,9 @@ class WindowTest(unittest.TestCase):
             requested_format=self.window.format_var.get())
         result = self.conversation.respond.return_value
         display.assert_called_once_with(result.reply, result.emoji, self.conversation.remaining)
+        self.window.previous_message_box.delete.assert_called_once_with("1.0", "end")
+        self.window.previous_message_box.insert.assert_called_once_with("1.0", "Current message")
+        self.window.input_box.delete.assert_called_once_with("1.0", "end")
         self.root.after.assert_not_called()
 
     def test_failure_reports_error_without_displaying_success_or_closing(self):
@@ -83,6 +90,7 @@ class WindowTest(unittest.TestCase):
         self.conversation.respond.side_effect = RuntimeError("Synthetic failure")
         self.window.submit("Keep this input")
         self.window.input_box.delete.assert_not_called()
+        self.window.previous_message_box.delete.assert_not_called()
         self.window.input_box.configure.assert_called_with(state="normal")
         self.window.send_button.configure.assert_called_with(state="normal")
 
@@ -126,9 +134,12 @@ class WindowTest(unittest.TestCase):
         self.conversation.repeat.return_value = self.conversation.respond.return_value
         with patch.object(self.window, "display") as display:
             self.window.repeat()
-        self.conversation.repeat.assert_called_once_with(self.window._parameters())
+        self.conversation.repeat.assert_called_once_with(
+            self.window._parameters(), requested_format=self.window.format_var.get(),
+            user_message="Edited previous message")
         self.conversation.respond.assert_not_called()
         self.window.input_box.delete.assert_not_called()
+        self.window.previous_message_box.delete.assert_not_called()
         result = self.conversation.repeat.return_value
         display.assert_called_once_with(result.reply, result.emoji, self.conversation.remaining)
 
@@ -144,6 +155,7 @@ class WindowTest(unittest.TestCase):
         self.window.send_button.configure.assert_called_with(state="disabled")
         for slider in self.window.parameter_sliders.values():
             slider.configure.assert_called_with(state="normal")
+        self.window.previous_message_box.configure.assert_called_with(state="normal")
         self.root.destroy.assert_not_called()
 
     def test_failed_repeat_preserves_display_and_input(self):
@@ -179,13 +191,27 @@ class WindowTest(unittest.TestCase):
                 self.window.status.configure.assert_called_with(text=expected)
                 self.assertNotIn("synthetic-secret-marker", expected)
 
+    def test_token_limit_displays_partial_reply_and_moves_input_to_previous(self):
+        error = TokenLimitResponse(None, Reaction(reply="Partial reply", emoji=""))
+        self.conversation.respond.side_effect = error
+        self.conversation.can_repeat = True
+        with patch.object(self.window, "display") as display:
+            self.window.submit("Submitted message for retry")
+        display.assert_called_once_with("Partial reply", "", self.conversation.remaining)
+        self.window.status.configure.assert_called_with(
+            text="Maxtokens reached. Response incomplete")
+        self.window.previous_message_box.insert.assert_called_once_with(
+            "1.0", "Submitted message for retry")
+        self.window.input_box.delete.assert_called_once_with("1.0", "end")
+        self.window.repeat_button.configure.assert_called_with(state="normal")
+
     def test_format_radio_choices_and_default_come_from_configuration(self):
-        self.assertEqual([call.kwargs["value"] for call in self.widgets.Radiobutton.call_args_list],
+        self.assertEqual([call.kwargs["value"] for call in self.themed_widgets.Radiobutton.call_args_list],
                          self.config["requested_formats"])
         self.assertEqual(self.widgets.StringVar.call_args.kwargs["value"],
                          self.config["requested_formats"][self.config["default_format_index"]])
 
-    def test_selected_format_is_sent_only_on_new_submission(self):
+    def test_selected_format_is_sent_on_send_and_repeat(self):
         selected = self.config["requested_formats"][-1]
         self.window.format_var.get.return_value = selected
         self.window.submit("Current message")
@@ -194,7 +220,9 @@ class WindowTest(unittest.TestCase):
         self.conversation.can_repeat = True
         self.conversation.repeat.return_value = self.conversation.respond.return_value
         self.window.repeat()
-        self.conversation.repeat.assert_called_once_with(self.window._parameters())
+        self.conversation.repeat.assert_called_once_with(
+            self.window._parameters(), requested_format=self.window.format_var.get(),
+            user_message="Edited previous message")
 
     def test_statistics_distinguish_missing_usage_from_zero(self):
         self.window.display_statistics()

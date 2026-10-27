@@ -47,14 +47,15 @@ def load_settings(project_root: Path) -> dict:
         "system_prompt_file", "realms_file", "format_label",
         "text_font_family", "send_button_text", "remaining_text", "error_text",
         "repeat_button_text",
-        "empty_message_error_text", "parameter_error_text", "response_error_text",
+        "previous_message_label",
+        "empty_message_error_text", "parameter_error_text", "response_error_text", "token_limit_text",
         "statistics_text", "statistics_unavailable_text", "balance_unavailable_text",
         "statistics_yes_text", "statistics_no_text", "statistics_duration_text",
     ):
         _require_text(data, name)
     for name in ("window_width", "window_height", "emoji_font_size", "interaction_limit",
                  "ui_padding", "text_font_size", "reply_box_height", "input_box_height",
-                 "statistics_font_size", "controls_width"):
+                 "statistics_font_size", "controls_width", "previous_message_box_height"):
         value = data.get(name)
         if type(value) is not int or value <= 0:
             raise ValueError(f"{name} must be a positive integer.")

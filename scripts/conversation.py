@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from time import perf_counter
 from pydantic import BaseModel, Field, ValidationError
+from pydantic_core import from_json
 from openai import LengthFinishReasonError
 from langchain_core.exceptions import OutputParserException
 from langchain_openai import ChatOpenAI
@@ -41,6 +42,39 @@ class Reaction(BaseModel):
     emoji: str = Field(description="An emoji reflecting the user's message.")
 
 
+class TokenLimitResponse(ModelResponseError):
+    """An incomplete request, with any recoverable reply available for display."""
+
+    def __init__(self, raw, parsed=None):
+        super().__init__("Maxtokens reached. Response incomplete")
+        self.partial = parsed if isinstance(parsed, Reaction) else _partial_reaction(raw)
+
+
+def _partial_reaction(raw) -> Reaction:
+    """Recover reply fields from truncated JSON without displaying schema syntax."""
+    choices = getattr(raw, "choices", None)
+    message = choices[0].message if choices else raw
+    content = getattr(message, "content", None)
+    candidates = [content] if isinstance(content, str) else []
+    extra = getattr(message, "additional_kwargs", None) or {}
+    calls = extra.get("tool_calls") or getattr(message, "tool_calls", None) or []
+    for call in calls:
+        function = call.get("function", {}) if isinstance(call, dict) else call.function
+        arguments = function.get("arguments") if isinstance(function, dict) else function.arguments
+        candidates.append(arguments)
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        try:
+            data = from_json(candidate, allow_partial="trailing-strings")
+        except ValueError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("reply"), str):
+            return Reaction(reply=data["reply"], emoji=data.get("emoji")
+                            if isinstance(data.get("emoji"), str) else "")
+    return Reaction(reply="", emoji="")
+
+
 class StructuredModel:
     """Bind per-call parameters before LangChain's raw/parsed response mapping."""
 
@@ -77,7 +111,7 @@ class Conversation:
     def __init__(self, settings: dict, template: str, realms: list[str], starters: list[str], model, choose):
         """Inject a structured model and random.choice-compatible chooser.
 
-        Keep only the latest successful request for Repeat, never a transcript.
+        Keep the latest successful or token-limited request for Repeat, never a transcript.
         """
         validate_prompt_template(template)
         if not realms or not starters:
@@ -128,22 +162,48 @@ class Conversation:
         if requested_format not in self._settings["requested_formats"]:
             raise ValueError("Select a configured response format.")
         generation_parameters(self._settings, parameters)
-        prompt = render_prompt_template(self._template, self._choose(self._realms), requested_format)
-        if self.remaining > 1:
-            prompt += "\n\n" + self._settings["next_question_text"]
-        messages = (("system", prompt), ("human", user_message))
+        realm = self._choose(self._realms)
         final = self.remaining == 1
-        result = self._invoke(messages, parameters, final, repeat=False)
-        self._last_request = (messages, final)
+        messages = self._messages(user_message, realm, requested_format, final)
+        try:
+            result = self._invoke(messages, parameters, final, repeat=False)
+        except TokenLimitResponse:
+            # Repeat should retry this request with a larger limit, even on first Send.
+            self._last_request = (messages, final, realm, requested_format)
+            raise
+        self._last_request = (messages, final, realm, requested_format)
         self._remaining -= 1
         return result
 
-    def repeat(self, parameters: dict | None = None) -> Reaction:
-        """Resend the exact last successful request with new parameters; no count change."""
+    def _messages(self, user_message, realm, requested_format, final):
+        prompt = render_prompt_template(self._template, realm, requested_format)
+        if not final:
+            prompt += "\n\n" + self._settings["next_question_text"]
+        return (("system", prompt), ("human", user_message))
+
+    def repeat(self, parameters: dict | None = None,
+               requested_format: str | None = None,
+               user_message: str | None = None) -> Reaction:
+        """Regenerate the edited message with the saved realm; no count change."""
         if not self.can_repeat:
-            raise ValueError("Send a message successfully before using Repeat.")
-        messages, final = self._last_request
-        return self._invoke(messages, parameters, final, repeat=True)
+            raise ValueError("Send a message before using Repeat.")
+        messages, final, realm, previous_format = self._last_request
+        if requested_format is None:
+            requested_format = previous_format
+        if requested_format not in self._settings["requested_formats"]:
+            raise ValueError("Select a configured response format.")
+        if user_message is None:
+            user_message = messages[1][1]
+        if not isinstance(user_message, str) or not user_message.strip():
+            raise EmptyMessageError("Enter a nonempty previous message.")
+        messages = self._messages(user_message, realm, requested_format, final)
+        try:
+            result = self._invoke(messages, parameters, final, repeat=True)
+        except TokenLimitResponse:
+            self._last_request = (messages, final, realm, requested_format)
+            raise
+        self._last_request = (messages, final, realm, requested_format)
+        return result
 
     def _record_usage(self, raw):
         stats = self.statistics
@@ -177,6 +237,8 @@ class Conversation:
             response = self._model.invoke(list(messages), **values)
             if isinstance(response, dict):
                 self._record_usage(response.get("raw"))
+                if stats.limit_reached:
+                    raise TokenLimitResponse(response.get("raw"), response.get("parsed"))
                 if response.get("parsing_error"):
                     raise ModelResponseError("The model response could not be parsed.")
                 result = response.get("parsed")
@@ -189,7 +251,7 @@ class Conversation:
             self._record_usage(error.completion)
             stats.limit_reached = True
             stats.failures += 1
-            raise ModelResponseError("The model response reached its token limit.") from None
+            raise TokenLimitResponse(error.completion) from None
         except (OutputParserException, ValidationError):
             stats.failures += 1
             raise ModelResponseError("The model response could not be parsed.") from None

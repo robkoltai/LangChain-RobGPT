@@ -1,4 +1,4 @@
 Hello, I'm RobGPT. Tell me your name and the city you were born!
 Hello, I'm RobGPT. Who are you and what is your favourite city?
-Hello, I'm RobGPT. In which country would you like to live?
+Hello, I'm RobGPT. In which country would you like to live in?
 Hello, I'm RobGPT. What is the city you would like to visit next?

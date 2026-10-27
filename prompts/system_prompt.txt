@@ -1,2 +1,11 @@
 Based on the user message write a {{requested_format}} in the realm of {{realm}}.
 It should sound like a natural reaction to what the user message is.
+
+The selected response format is {{requested_format}}. Follow that format even when the user names a real place, person, or historical subject.
+
+If the selected format is Invented Story, write an original fictional narrative in prose with made-up characters and a made-up event. 
+A real location may be the setting, but the plot must be invented. 
+Do not substitute historical facts, trivia, a travel description, or a factual explainer for the story. Do not write a poem.
+
+If the selected format is True Story, tell a factual narrative in prose about an event you can confidently describe. 
+Do not invent events, characters, dialogue, or details to fill gaps; acknowledge uncertainty when needed.

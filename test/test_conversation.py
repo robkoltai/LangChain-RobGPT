@@ -7,7 +7,7 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage
 
 from unit_helpers import app_settings
-from scripts.conversation import Conversation, Reaction, create_model, EmptyMessageError, ModelResponseError
+from scripts.conversation import Conversation, Reaction, create_model, EmptyMessageError, ModelResponseError, TokenLimitResponse
 from scripts.settings import generation_parameters
 
 
@@ -133,6 +133,55 @@ class ConversationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.session.repeat()
         self.model.invoke.assert_not_called()
+
+    def test_repeat_changes_format_preserving_message_realm_and_count(self):
+        self.session.respond("Original message", requested_format="Poem")
+        remaining = self.session.remaining
+        self.choose.reset_mock()
+        for selected in self.config["requested_formats"]:
+            with self.subTest(selected=selected):
+                self.session.repeat(requested_format=selected)
+                messages = self.model.invoke.call_args.args[0]
+                self.assertEqual(messages, [
+                    ("system", f"A {selected} about {self.realms[-1]}\n\n"
+                     + self.config["next_question_text"]),
+                    ("human", "Original message")])
+                self.assertEqual(self.session.remaining, remaining)
+        self.choose.assert_not_called()
+        self.session.repeat()
+        self.assertEqual(self.model.invoke.call_args.args[0], messages)
+
+    def test_repeat_rejects_invalid_format_without_a_model_call(self):
+        self.session.respond("Original message")
+        self.model.reset_mock()
+        with self.assertRaises(ValueError):
+            self.session.repeat(requested_format="invalid format")
+        self.model.invoke.assert_not_called()
+
+    def test_repeat_uses_edited_message_and_remembers_it_without_spending_question(self):
+        self.session.respond("Original message")
+        remaining = self.session.remaining
+        self.choose.reset_mock()
+        changed = {name: spec["max"] for name, spec in self.config["model_parameters"].items()}
+        self.session.repeat(changed, requested_format="True Story", user_message="Edited message")
+        messages = self.model.invoke.call_args.args[0]
+        self.assertEqual(messages[1], ("human", "Edited message"))
+        self.assertIn("True Story about " + self.realms[-1], messages[0][1])
+        self.assertEqual(self.model.invoke.call_args.kwargs, changed)
+        self.assertEqual(self.session.remaining, remaining)
+        self.choose.assert_not_called()
+        self.session.repeat()
+        self.assertEqual(self.model.invoke.call_args.args[0], messages)
+
+    def test_blank_edited_repeat_is_rejected_without_request_or_saved_message_change(self):
+        self.session.respond("Original message")
+        messages = self.model.invoke.call_args.args[0]
+        self.model.reset_mock()
+        with self.assertRaises(EmptyMessageError):
+            self.session.repeat(user_message=" \n ")
+        self.model.invoke.assert_not_called()
+        self.session.repeat()
+        self.assertEqual(self.model.invoke.call_args.args[0], messages)
 
     def test_repeat_after_final_keeps_farewell_and_zero_count(self):
         for _ in range(self.config["interaction_limit"]):
@@ -280,6 +329,46 @@ class ConversationTest(unittest.TestCase):
         self.assertIsNone(stats.input_tokens)
         self.assertIsNone(stats.output_tokens)
 
+    def test_truncated_parsed_response_preserves_question_and_replays_incomplete_request(self):
+        self.session.respond("Successful message")
+        remaining = self.session.remaining
+        self.model.invoke.return_value = {
+            "raw": AIMessage(content="", usage_metadata={
+                "input_tokens": 12, "output_tokens": 8, "total_tokens": 20},
+                response_metadata={"finish_reason": "length"}),
+            "parsed": Reaction(reply="Parseable but truncated", emoji="🙂"),
+            "parsing_error": None,
+        }
+        for action in (lambda: self.session.respond("Truncated message"), self.session.repeat):
+            with self.assertRaises(TokenLimitResponse) as caught:
+                action()
+            self.assertEqual(caught.exception.partial.reply, "Parseable but truncated")
+            self.assertEqual(self.session.remaining, remaining)
+        stats = self.session.statistics
+        self.assertEqual((stats.successes, stats.failures), (1, 2))
+        self.assertTrue(stats.limit_reached)
+        self.assertEqual((stats.total_input_tokens, stats.total_output_tokens), (24, 16))
+        self.model.invoke.return_value = Reaction(reply="Successful repeat", emoji="🙂")
+        self.session.repeat()
+        self.assertEqual(self.model.invoke.call_args.args[0][-1], ("human", "Truncated message"))
+
+    def test_partial_json_recovery_decodes_text_and_allows_missing_emoji(self):
+        for content, expected in (
+            ('{"reply":"Hello\\nworld', "Hello\nworld"),
+            ('{"reply":"Hello", "emoji":"', "Hello"),
+            ('{"reply":', ""),
+        ):
+            with self.subTest(content=content):
+                error = TokenLimitResponse(AIMessage(content=content))
+                self.assertEqual(error.partial.reply, expected)
+                self.assertEqual(error.partial.emoji, "")
+
+    def test_truncated_tool_arguments_are_recovered(self):
+        raw = AIMessage(content="", additional_kwargs={"tool_calls": [{
+            "id": "partial-call", "type": "function", "function": {
+                "name": "Reaction", "arguments": '{"reply":"Partial tool reply'}}]})
+        self.assertEqual(TokenLimitResponse(raw).partial.reply, "Partial tool reply")
+
 
 class ModelFactoryTest(unittest.TestCase):
     def test_sdk_truncation_keeps_reported_usage_and_limit_flag(self):
@@ -290,7 +379,7 @@ class ModelFactoryTest(unittest.TestCase):
                 "model": config["model_name"],
                 "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
                 "choices": [{"index": 0, "finish_reason": "length", "message": {
-                    "role": "assistant", "content": '{"reply":'}}],
+                    "role": "assistant", "content": '{"reply":"Partial SDK reply'}}],
             })
         with httpx.Client(transport=httpx.MockTransport(handle)) as transport:
             model = create_model(config, {
@@ -298,8 +387,11 @@ class ModelFactoryTest(unittest.TestCase):
             }, http_client=transport)
             session = Conversation(config, "{{requested_format}} about {{realm}}", ["Synthetic realm"], ["Synthetic starter"],
                                    model, lambda items: items[0])
-            with self.assertRaises(ModelResponseError):
+            with self.assertRaises(TokenLimitResponse) as caught:
                 session.respond("Synthetic message")
+            self.assertEqual(caught.exception.partial.reply, "Partial SDK reply")
+            self.assertTrue(session.can_repeat)
+            self.assertEqual(session.remaining, config["interaction_limit"])
         self.assertEqual(session.statistics.output_tokens, 8)
         self.assertTrue(session.statistics.limit_reached)
         self.assertEqual(session.statistics.failures, 1)
@@ -328,9 +420,10 @@ class ModelFactoryTest(unittest.TestCase):
             remaining = session.remaining
             changed = {name: spec["max"] for name, spec in config["model_parameters"].items()}
             changed["temperature"] = 0.12  # Regression for the reported slider position.
-            session.repeat(changed)
+            session.repeat(changed, requested_format="True Story", user_message="Edited message")
         self.assertEqual(len(payloads), 2)
-        self.assertEqual(payloads[0]["messages"], payloads[1]["messages"])
+        self.assertEqual(payloads[1]["messages"][1]["content"], "Edited message")
+        self.assertIn("True Story about Synthetic realm", payloads[1]["messages"][0]["content"])
         for payload, parameters in zip(payloads, (generation_parameters(config), changed)):
             for name, value in parameters.items():
                 # Current OpenAI SDK may normalize the token-limit field name.
