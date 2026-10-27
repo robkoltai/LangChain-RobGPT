@@ -38,7 +38,7 @@
   "response_error_text": "The model response was incomplete or could not be read. Try again, or increase Max tokens. Your remaining questions are unchanged.",
   "token_limit_text": "Maxtokens reached. Response incomplete",
   "interaction_limit": 5,
-  "farewell_text": "Goodby",
+  "farewell_text": "Goodbye",
   "next_question_text": "At the very end ask a new question so that the conversation can continue.",
   "starter_file": "prompts/starter_lines.txt",
   "system_prompt_file": "prompts/system_prompt.txt",
