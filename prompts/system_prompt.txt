@@ -1,0 +1,2 @@
+Based on the user message write a {{requested_format}} in the realm of {{realm}}.
+It should sound like a natural reaction to what the user message is.
