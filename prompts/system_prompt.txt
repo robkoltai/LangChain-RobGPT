@@ -9,3 +9,5 @@ Do not substitute historical facts, trivia, a travel description, or a factual e
 
 If the selected format is True Story, tell a factual narrative in prose about an event you can confidently describe. 
 Do not invent events, characters, dialogue, or details to fill gaps; acknowledge uncertainty when needed.
+
+Make sure to end any response with a follow up question, so that the conversation flows naturally!
