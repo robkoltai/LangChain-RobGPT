@@ -25,11 +25,13 @@ class WindowTest(unittest.TestCase):
         self.themed_widgets = themed_patch.start()
         self.addCleanup(themed_patch.stop)
         self.widgets.Text.side_effect = [Mock(), Mock(), Mock()]
+        self.widgets.StringVar.side_effect = [Mock(), Mock()]
         self.widgets.Label.side_effect = [Mock() for _ in range(8)]
         self.widgets.Button.side_effect = [Mock(), Mock()]
         self.widgets.Scale.side_effect = [Mock() for _ in self.config["model_parameters"]]
         self.themed_widgets.Radiobutton.side_effect = [Mock() for _ in self.config["requested_formats"]]
         self.window = Window(self.config, self.conversation, self.root)
+        self.window.model_var.get.return_value = self.config["model_name"]
         self.window.previous_message_box.get.return_value = "Edited previous message"
         self.window.format_var.get.return_value = self.config["requested_formats"][self.config["default_format_index"]]
         for name, slider in self.window.parameter_sliders.items():
@@ -237,3 +239,45 @@ class WindowTest(unittest.TestCase):
         text = self.window.statistics_box.configure.call_args.kwargs["text"]
         self.assertIn(self.config["statistics_duration_text"].format(seconds=stats.duration_seconds), text)
         self.assertIn(self.config["statistics_yes_text"], text)
+
+    def test_estimates_use_separate_fields_and_current_controls(self):
+        self.window.input_box.get.return_value = "Current draft"
+        self.window.send_cost = Mock()
+        self.window.repeat_cost = Mock()
+        self.conversation.estimate_cost_usd.side_effect = [0.00012345, None]
+        self.conversation.estimate_cost_usd.reset_mock()
+        self.window._update_costs()
+        calls = self.conversation.estimate_cost_usd.call_args_list
+        self.assertEqual(calls[0].args, ("Current draft", self.window._parameters(), self.window.format_var.get()))
+        self.assertEqual(calls[0].kwargs, {"repeat": False})
+        self.assertEqual(calls[1].args[0], "Edited previous message")
+        self.assertEqual(calls[1].kwargs, {"repeat": True})
+        self.window.send_cost.configure.assert_called_once_with(
+            text=self.config["cost_estimate_text"].format(usd=0.00012345))
+        self.window.repeat_cost.configure.assert_called_once_with(text=self.config["cost_unavailable_text"])
+        self.conversation.respond.assert_not_called()
+        self.conversation.repeat.assert_not_called()
+
+    def test_model_selector_uses_configured_models_and_refreshes_costs(self):
+        self.assertEqual(self.themed_widgets.Combobox.call_args.kwargs["values"],
+                         list(self.config["model_prices_usd_per_million_tokens"]))
+        self.window.model_var.get.return_value = "gpt-4.1-mini"
+        with patch.object(self.window, "_update_costs") as refresh:
+            self.window.model_var.trace_add.call_args.args[1]()
+        self.conversation.select_model.assert_called_once_with("gpt-4.1-mini")
+        refresh.assert_called_once()
+        self.window._busy = True
+        self.window._update_controls()
+        self.window.model_selector.configure.assert_called_with(state="disabled")
+
+    def test_text_edits_sliders_and_format_changes_refresh_estimates(self):
+        with patch.object(self.window, "_update_costs") as refresh:
+            for box in (self.window.input_box, self.window.previous_message_box):
+                box.edit_modified.return_value = True
+                event_handler = box.bind.call_args.args[1]
+                event_handler(Mock(widget=box))
+                box.edit_modified.assert_called_with(False)
+            for variable in self.window.parameter_vars.values():
+                variable.trace_add.call_args.args[1]()
+            self.window.format_var.trace_add.call_args.args[1]()
+            self.assertEqual(refresh.call_count, 2 + len(self.window.parameter_sliders) + 1)

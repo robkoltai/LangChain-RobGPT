@@ -1,13 +1,26 @@
 """Conversation state and one-call LangChain integration."""
 
 from dataclasses import dataclass
+from functools import lru_cache
+import json
 from time import perf_counter
+import tiktoken
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_core import from_json
 from openai import LengthFinishReasonError
 from langchain_core.exceptions import OutputParserException
 from langchain_openai import ChatOpenAI
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from scripts.settings import generation_parameters, render_prompt_template, validate_prompt_template
+
+
+@lru_cache(maxsize=8)
+def _encoding(model_name):
+    """Load each model tokenizer once, including an unavailable result."""
+    try:
+        return tiktoken.encoding_for_model(model_name)
+    except (KeyError, OSError, ValueError):
+        return None
 
 
 @dataclass
@@ -89,6 +102,10 @@ class StructuredModel:
         return model.with_structured_output(
             Reaction, include_raw=True, **self.options).invoke(messages)
 
+    def select_model(self, model_name: str):
+        """Retain the configured client and request options when switching models."""
+        self.model = self.model.model_copy(update={"model_name": model_name})
+
 
 def create_model(settings: dict, credentials: dict, *, http_client=None):
     """Build a LangChain model returning Reaction through structured output."""
@@ -121,6 +138,7 @@ class Conversation:
         self._realms = realms
         self._starters = starters
         self._model = model
+        self.model_name = settings["model_name"]
         self._choose = choose
         self._remaining = settings["interaction_limit"]
         self._last_request = None
@@ -141,6 +159,13 @@ class Conversation:
     def start(self) -> str:
         """Choose a starter without changing the remaining count."""
         return self._choose(self._starters)
+
+    def select_model(self, model_name: str):
+        """Apply the same selected model to Send, Repeat, and cost estimates."""
+        if model_name not in self._settings["model_prices_usd_per_million_tokens"]:
+            raise ValueError("Select a model with configured prices.")
+        self._model.select_model(model_name)
+        self.model_name = model_name
 
     def respond(self, user_message: str, parameters: dict | None = None,
                 requested_format: str | None = None) -> Reaction:
@@ -180,6 +205,42 @@ class Conversation:
         if not final:
             prompt += "\n\n" + self._settings["next_question_text"]
         return (("system", prompt), ("human", user_message))
+
+    def estimate_cost_usd(self, user_message: str, parameters: dict,
+                          requested_format: str, *, repeat=False) -> float | None:
+        """Estimate one request locally at uncached rates and the output limit.
+
+        Send has not chosen a realm yet, so use the largest rendered prompt.
+        Repeat uses its saved realm and final-turn flag. Schema/framing token
+        counts are approximate; this is not a provider quote or a hard cap.
+        """
+        rates = self._settings["model_prices_usd_per_million_tokens"].get(
+            self.model_name)
+        if (rates is None or not user_message.strip() or
+                (repeat and not self.can_repeat) or (not repeat and self.finished)):
+            return None
+        values = generation_parameters(self._settings, parameters)
+        if requested_format not in self._settings["requested_formats"]:
+            return None
+        encoding = _encoding(self.model_name)
+        if encoding is None:
+            return None
+        if repeat:
+            _, final, realm, _ = self._last_request
+            realms = [realm]
+        else:
+            final = self.remaining == 1
+            realms = self._realms
+        def count(text):
+            return len(encoding.encode(text, disallowed_special=()))
+        input_tokens = max(
+            3 + sum(3 + count(role) + count(content) for role, content in
+                    self._messages(user_message, realm, requested_format, final))
+            for realm in realms)
+        if self._settings["structured_output_method"] != "json_mode":
+            schema = convert_to_openai_tool(Reaction, strict=True)
+            input_tokens += count(json.dumps(schema, ensure_ascii=False)) + 16
+        return (input_tokens * rates["input"] + values["max_tokens"] * rates["output"]) / 1_000_000
 
     def repeat(self, parameters: dict | None = None,
                requested_format: str | None = None,

@@ -42,7 +42,7 @@ def load_settings(project_root: Path) -> dict:
     """Load application settings and reject missing/invalid required values."""
     data = _read_object(project_root / "config/RobGPT_config.json")
     for name in (
-        "model_name", "structured_output_method", "window_title", "reply_label",
+        "model_name", "model_label", "structured_output_method", "window_title", "reply_label",
         "input_label", "farewell_text", "next_question_text", "starter_file",
         "system_prompt_file", "realms_file", "format_label",
         "text_font_family", "send_button_text", "remaining_text", "error_text",
@@ -51,6 +51,7 @@ def load_settings(project_root: Path) -> dict:
         "empty_message_error_text", "parameter_error_text", "response_error_text", "token_limit_text",
         "statistics_text", "statistics_unavailable_text", "balance_unavailable_text",
         "statistics_yes_text", "statistics_no_text", "statistics_duration_text",
+        "cost_estimate_text", "cost_unavailable_text",
     ):
         _require_text(data, name)
     for name in ("window_width", "window_height", "emoji_font_size", "interaction_limit",
@@ -76,6 +77,18 @@ def load_settings(project_root: Path) -> dict:
     if type(index) is not int or not 0 <= index < len(formats):
         raise ValueError("default_format_index must select a configured format.")
     specs = data.get("model_parameters")
+    prices = data.get("model_prices_usd_per_million_tokens")
+    if not isinstance(prices, dict) or not prices:
+        raise ValueError("model_prices_usd_per_million_tokens must contain model-specific prices.")
+    if data["model_name"] not in prices:
+        raise ValueError("model_name must select a model with configured prices.")
+    for model, rates in prices.items():
+        if not isinstance(model, str) or not model.strip() or not isinstance(rates, dict):
+            raise ValueError("Invalid model pricing configuration.")
+        for category in ("input", "cached_input", "output"):
+            rate = rates.get(category)
+            if type(rate) not in (int, float) or not math.isfinite(rate) or rate < 0:
+                raise ValueError(f"Invalid {category} price for {model}.")
     if not isinstance(specs, dict) or set(specs) != {"temperature", "top_p", "max_tokens"}:
         raise ValueError("model_parameters must define temperature, top_p, and max_tokens.")
     for name, spec in specs.items():

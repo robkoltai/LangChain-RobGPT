@@ -24,6 +24,77 @@ class ConversationTest(unittest.TestCase):
         self.session = Conversation(self.config, self.template, self.realms, self.starters,
                                     self.model, self.choose)
 
+    def estimate(self, message="Current message", parameters=None, repeat=False, requested_format=None):
+        # Offline deterministic tokenization: one synthetic token per character.
+        with patch("scripts.conversation._encoding") as encoding:
+            encoding.return_value.encode.side_effect = lambda text, **_: list(text)
+            return self.session.estimate_cost_usd(
+                message, parameters or generation_parameters(self.config),
+                requested_format or self.config["requested_formats"][0], repeat=repeat)
+
+    def test_cost_estimate_prices_input_and_output_without_calling_or_changing_state(self):
+        self.config["structured_output_method"] = "json_mode"
+        parameters = generation_parameters(self.config)
+        messages = self.session._messages("Current message", self.realms[-1],
+                                         self.config["requested_formats"][0], False)
+        tokens = 3 + sum(3 + len(role) + len(text) for role, text in messages)
+        self.assertAlmostEqual(self.estimate(),
+            (tokens * 0.15 + parameters["max_tokens"] * 0.60) / 1_000_000)
+        self.choose.assert_not_called()
+        self.model.invoke.assert_not_called()
+        self.assertFalse(self.session.can_repeat)
+        self.assertEqual(self.session.remaining, self.config["interaction_limit"])
+
+    def test_cost_changes_with_message_format_and_output_limit(self):
+        baseline = self.estimate()
+        self.assertGreater(self.estimate("Longer message" * 100), baseline)
+        parameters = generation_parameters(self.config)
+        parameters["max_tokens"] += 100
+        self.assertAlmostEqual(self.estimate(parameters=parameters) - baseline, 100 * 0.60 / 1_000_000)
+        self.assertNotEqual(self.estimate(requested_format="Invented Story"), baseline)
+        parameters = generation_parameters(self.config)
+        parameters["temperature"] = 1.0
+        self.assertEqual(self.estimate(parameters=parameters), baseline)
+
+    def test_schema_and_largest_possible_realm_are_included(self):
+        baseline = self.estimate()
+        self.realms.append("A much longer realm" * 20)
+        self.assertGreater(self.estimate(), baseline)
+        self.config["structured_output_method"] = "json_mode"
+        without_schema = self.estimate()
+        self.config["structured_output_method"] = "json_schema"
+        self.assertLess(without_schema, self.estimate())
+
+    def test_repeat_estimate_uses_saved_realm_and_final_flag_and_edited_input(self):
+        self.assertIsNone(self.estimate(repeat=True))
+        self.session._remaining = 1
+        self.session.respond("Final message")
+        baseline = self.estimate(repeat=True)
+        self.assertIsNone(self.estimate())
+        self.realms.append("Unchosen long realm" * 100)
+        self.assertEqual(self.estimate(repeat=True), baseline)
+        self.assertGreater(self.estimate("Edited longer message" * 100, repeat=True), baseline)
+
+    def test_unpriced_model_and_empty_input_do_not_show_misleading_costs(self):
+        self.assertIsNone(self.estimate("  "))
+        self.session.model_name = "another-model"
+        self.assertIsNone(self.estimate())
+
+    def test_model_selection_updates_request_model_and_estimate_without_resetting_session(self):
+        self.session.respond("Original message")
+        previous_request = self.session._last_request
+        remaining = self.session.remaining
+        baseline = self.estimate(repeat=True)
+        self.session.select_model("gpt-4.1-mini")
+        self.model.select_model.assert_called_once_with("gpt-4.1-mini")
+        self.assertGreater(self.estimate(repeat=True), baseline)
+        self.assertEqual(self.session._last_request, previous_request)
+        self.assertEqual(self.session.remaining, remaining)
+        self.assertEqual(self.config["model_name"], "gpt-4o-mini")
+        with self.assertRaises(ValueError):
+            self.session.select_model("unconfigured-model")
+        self.assertEqual(self.session.model_name, "gpt-4.1-mini")
+
     def test_starter_uses_chooser_without_spending_interaction(self):
         self.assertEqual(self.session.start(), self.starters[-1])
         self.choose.assert_called_once_with(self.starters)
@@ -420,8 +491,11 @@ class ModelFactoryTest(unittest.TestCase):
             remaining = session.remaining
             changed = {name: spec["max"] for name, spec in config["model_parameters"].items()}
             changed["temperature"] = 0.12  # Regression for the reported slider position.
+            session.select_model("gpt-4.1-mini")
             session.repeat(changed, requested_format="True Story", user_message="Edited message")
         self.assertEqual(len(payloads), 2)
+        self.assertEqual([payload["model"] for payload in payloads],
+                         [config["model_name"], "gpt-4.1-mini"])
         self.assertEqual(payloads[1]["messages"][1]["content"], "Edited message")
         self.assertIn("True Story about Synthetic realm", payloads[1]["messages"][0]["content"])
         for payload, parameters in zip(payloads, (generation_parameters(config), changed)):

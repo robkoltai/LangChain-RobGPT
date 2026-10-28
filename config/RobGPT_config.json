@@ -1,5 +1,25 @@
 {
   "model_name": "gpt-4o-mini",
+  "model_label": "Model",
+  "model_prices_usd_per_million_tokens": {
+    "gpt-4o-mini": {
+      "input": 0.15,
+      "cached_input": 0.075,
+      "output": 0.60
+    },
+    "gpt-4.1-mini": {
+      "input": 0.40,
+      "cached_input": 0.10,
+      "output": 1.60
+    },
+    "gpt-4o": {
+      "input": 2.50,
+      "cached_input": 1.25,
+      "output": 10.00
+    }
+  },
+  "cost_estimate_text": "Est. USD ${usd:.8f} (max output)",
+  "cost_unavailable_text": "Est. USD: unavailable",
   "structured_output_method": "json_schema",
   "request_timeout_seconds": 30,
   "request_max_retries": 0,

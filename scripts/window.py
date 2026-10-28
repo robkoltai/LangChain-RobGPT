@@ -67,6 +67,8 @@ class Window:
             current_header, text=settings["send_button_text"], font=font,
             command=lambda: self.submit(self.input_box.get("1.0", "end-1c")))
         self.send_button.grid(row=0, column=1, sticky="e")
+        self.send_cost = ttk.Label(current_header)
+        self.send_cost.grid(row=0, column=2, sticky="e", padx=(padding, 0))
         current_border = tk.Frame(editor, background="#202020", borderwidth=0)
         current_border.grid(row=3, column=0, sticky="ew")
         current_border.columnconfigure(0, weight=1)
@@ -82,6 +84,8 @@ class Window:
         self.repeat_button = tk.Button(
             previous_header, text=settings["repeat_button_text"], font=font, command=self.repeat)
         self.repeat_button.grid(row=0, column=1, sticky="e")
+        self.repeat_cost = ttk.Label(previous_header)
+        self.repeat_cost.grid(row=0, column=2, sticky="e", padx=(padding, 0))
         previous_border = tk.Frame(editor, background="#202020", borderwidth=0)
         previous_border.grid(row=5, column=0, sticky="ew")
         previous_border.columnconfigure(0, weight=1)
@@ -93,15 +97,28 @@ class Window:
         controls = tk.Frame(root)
         controls.grid(row=1, column=1, sticky="nsew", padx=padding, pady=padding)
         controls.columnconfigure(0, weight=1)
+        model_controls = tk.Frame(controls)
+        model_controls.grid(row=0, column=0, sticky="ew", pady=padding)
+        model_controls.columnconfigure(0, weight=1)
+        ttk.Label(model_controls, text=settings["model_label"], font=font).grid(
+            row=0, column=0, sticky="w")
+        self.model_var = tk.StringVar(master=root, value=settings["model_name"])
+        self.model_selector = ttk.Combobox(
+            model_controls, textvariable=self.model_var, state="readonly", font=font,
+            values=list(settings["model_prices_usd_per_million_tokens"]))
+        self.model_selector.grid(row=1, column=0, sticky="ew")
         self.parameter_sliders = {}
+        self.parameter_vars = {}
         for row, (name, spec) in enumerate(settings["model_parameters"].items()):
+            variable = tk.DoubleVar(master=root, value=spec["default"])
             slider = tk.Scale(
                 controls, label=spec["label"], from_=spec["min"], to=spec["max"],
-                resolution=spec["step"], orient="horizontal", font=font,
+                resolution=spec["step"], orient="horizontal", font=font, variable=variable,
             )
             slider.set(spec["default"])
-            slider.grid(row=row, column=0, sticky="ew", pady=padding)
+            slider.grid(row=row + 1, column=0, sticky="ew", pady=padding)
             self.parameter_sliders[name] = slider
+            self.parameter_vars[name] = variable
 
         # Use a drawable theme: macOS native radio indicators ignore many colors.
         style = ttk.Style(root)
@@ -121,7 +138,7 @@ class Window:
             indicatorforeground=[("disabled", "#666666")],
         )
         formats = tk.Frame(controls, background="#ffffff")
-        formats.grid(row=len(self.parameter_sliders), column=0, sticky="ew", pady=padding)
+        formats.grid(row=len(self.parameter_sliders) + 1, column=0, sticky="ew", pady=padding)
         tk.Label(formats, text=settings["format_label"], font=font,
                  background="#ffffff", foreground="#000000").grid(row=0, column=0, sticky="w")
         self.format_var = tk.StringVar(
@@ -141,7 +158,36 @@ class Window:
             root, font=(settings["text_font_family"], settings["statistics_font_size"]),
             anchor="w", justify="left", wraplength=settings["window_width"] - 2 * padding)
         self.statistics_box.grid(row=3, column=0, columnspan=2, sticky="ew", padx=padding, pady=padding)
+        for box in (self.input_box, self.previous_message_box):
+            box.edit_modified(False)
+            box.bind("<<Modified>>", self._input_changed)
+        for variable in self.parameter_vars.values():
+            variable.trace_add("write", lambda *_: self._update_costs())
+        self.format_var.trace_add("write", lambda *_: self._update_costs())
+        self.model_var.trace_add("write", self._model_changed)
         self._update_controls()
+
+    def _model_changed(self, *_):
+        self.conversation.select_model(self.model_var.get())
+        self._update_costs()
+
+    def _input_changed(self, event):
+        if event.widget.edit_modified():
+            event.widget.edit_modified(False)
+            self._update_costs()
+
+    def _update_costs(self):
+        for label, box, repeat in ((self.send_cost, self.input_box, False),
+                                   (self.repeat_cost, self.previous_message_box, True)):
+            try:
+                usd = self.conversation.estimate_cost_usd(
+                    box.get("1.0", "end-1c"), self._parameters(),
+                    self.format_var.get(), repeat=repeat)
+                text = (self.settings["cost_estimate_text"].format(usd=usd)
+                        if usd is not None else self.settings["cost_unavailable_text"])
+            except (ValueError, TypeError, OSError):
+                text = self.settings["cost_unavailable_text"]
+            label.configure(text=text)
 
     def display_statistics(self):
         stats = self.conversation.statistics
@@ -162,6 +208,7 @@ class Window:
                 for name, slider in self.parameter_sliders.items()}
 
     def _update_controls(self):
+        self.model_selector.configure(state="disabled" if self._busy else "readonly")
         self._enable_input(not self._busy and not self._completed)
         self.repeat_button.configure(
             state="normal" if not self._busy and self.conversation.can_repeat else "disabled")
@@ -171,6 +218,7 @@ class Window:
             slider.configure(state="disabled" if self._busy else "normal")
         for button in self.format_buttons:
             button.configure(state="disabled" if self._busy else "normal")
+        self._update_costs()
 
     def _enable_input(self, enabled: bool):
         state = "normal" if enabled else "disabled"

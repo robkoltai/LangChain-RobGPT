@@ -25,6 +25,15 @@ class SettingsTest(unittest.TestCase):
     def test_loads_settings_from_project_root(self):
         self.assertEqual(settings.load_settings(self.root), self.config)
 
+    def test_default_model_requires_matching_prices_and_rates_must_be_valid(self):
+        for changes in ({"model_name": "unpriced-model"},
+                        {"model_prices_usd_per_million_tokens": {"gpt-4o-mini": {
+                            "input": -1, "cached_input": 0.075, "output": 0.60}}}):
+            with self.subTest(changes=changes):
+                self.write("config/RobGPT_config.json", json.dumps(dict(self.config, **changes)))
+                with self.assertRaises(ValueError):
+                    settings.load_settings(self.root)
+
     def test_rejects_missing_required_setting(self):
         del self.config["interaction_limit"]
         self.write("config/RobGPT_config.json", json.dumps(self.config))

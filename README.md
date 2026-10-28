@@ -66,9 +66,15 @@ Edit Previous message if desired, adjust the sliders or format, and click **Repe
 
 The interface shows provider-reported token usage, session totals, request counts, response time, and token-limit status. Missing metadata is shown as unavailable. Account balance is currently unavailable because a working gateway balance endpoint has not been verified.
 
+Each request button also shows a live educational USD estimate, recalculated when either message field, any slider, or the response format changes. It uses the prices under the exact model name in `model_prices_usd_per_million_tokens`, local tokenization of the system/user messages and structured-output schema, and the full Max tokens output allowance. Send uses the largest realm prompt because its random realm is chosen only when sending; Repeat uses the saved realm. Temperature and Top P do not change token prices, so adjusting them may leave the estimate unchanged.
+
+The estimate assumes uncached input and excludes provider markups and retries. It is approximate, not a guaranteed maximum or a Great Learning balance deduction. Prices are based on [OpenAI's GPT-4o-mini model page](https://developers.openai.com/api/docs/models/gpt-4o-mini): $0.15 input, $0.075 cached input, and $0.60 output per million tokens. No generation or approval step is needed to calculate the estimate. The tokenizer may download its public encoding data on first use; missing model pricing or an unavailable tokenizer displays “Est. USD: unavailable”.
+
 ## Configuration and prompts
 
 Application constants and defaults have one source: [config/RobGPT_config.json](config/RobGPT_config.json). It defines the model, request settings, slider ranges/defaults, format choices, interaction limit, labels, window dimensions, and resource paths. Refer to that file for their actual values.
+
+The Model dropdown selects `gpt-4o-mini`, `gpt-4.1-mini`, or `gpt-4o` for both Send and Repeat and immediately refreshes the USD estimates. Its choices come from the model-specific pricing entries; `model_name` sets the startup default. Selection preserves the previous message, realm, and remaining question count. These models were listed by the configured gateway's `/models` endpoint, but generation access was not tested. Prices use OpenAI's standard USD rates, not verified gateway billing: see [GPT-4.1-mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini) and [GPT-4o](https://developers.openai.com/api/docs/models/gpt-4o). OpenAI currently marks these GPT-4 models as deprecated; they are retained here for comparison with the existing educational setup.
 
 The configured text resources are:
 
