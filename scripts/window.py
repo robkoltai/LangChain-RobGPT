@@ -91,7 +91,7 @@ class Window:
         previous_border.columnconfigure(0, weight=1)
         self.previous_message_box = tk.Text(
             previous_border, wrap="word", font=font, width=1,
-            height=settings["previous_message_box_height"], **text_options)
+            height=settings["previous_message_box_height"], state="disabled", **text_options)
         self.previous_message_box.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
 
         controls = tk.Frame(root)
@@ -212,8 +212,7 @@ class Window:
         self._enable_input(not self._busy and not self._completed)
         self.repeat_button.configure(
             state="normal" if not self._busy and self.conversation.can_repeat else "disabled")
-        self.previous_message_box.configure(
-            state="normal" if not self._busy and self.conversation.can_repeat else "disabled")
+        self.previous_message_box.configure(state="disabled")
         for slider in self.parameter_sliders.values():
             slider.configure(state="disabled" if self._busy else "normal")
         for button in self.format_buttons:
@@ -251,7 +250,7 @@ class Window:
         self._request(user_message=user_message)
 
     def repeat(self):
-        """Regenerate the editable previous message using current settings."""
+        """Regenerate the read-only previous message using current settings."""
         if self._busy or not self.conversation.can_repeat:
             return
         self._request(user_message=self.previous_message_box.get("1.0", "end-1c"), repeat=True)
@@ -261,6 +260,7 @@ class Window:
         self.previous_message_box.configure(state="normal")
         self.previous_message_box.delete("1.0", "end")
         self.previous_message_box.insert("1.0", user_message)
+        self.previous_message_box.configure(state="disabled")
         self.input_box.configure(state="normal")
         self.input_box.delete("1.0", "end")
 

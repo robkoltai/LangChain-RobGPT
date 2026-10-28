@@ -2,7 +2,7 @@
 
 A small Python desktop chatbot for learning LangChain and experimenting with LLMs. It combines a system-prompt template, a random realm, and a user-selected response format to generate surprising replies and emojis.
 
-Use the sliders to experiment with generation parameters. **Send** submits **Current message** as a new interaction. **Repeat with different settings** submits the editable **Previous message** using the current sliders and response format, preserving the original realm and remaining-question count. The final reply stays visible until you close the window.
+Use the sliders to experiment with generation parameters. **Send** submits **Current message** as a new interaction. **Repeat with different settings** resubmits the read-only **Previous message** using the current sliders and response format, preserving the original realm and remaining-question count. The final reply stays visible until you close the window.
 
 ## Requirements
 
@@ -62,7 +62,7 @@ This command does not require activation. Paths to configuration and prompt reso
 
 Enter text in **Current message**, select a response format, and click **Send** at its top right. After a successful or token-limited response, the submitted text moves to **Previous message** and Current message clears. Other failures preserve both boxes.
 
-Edit Previous message if desired, adjust the sliders or format, and click **Repeat with different settings** at its top right. Repeat uses that lower text and the current settings, keeps the original realm and question count, and leaves any draft in Current message untouched. Previous message remains editable after the last interaction.
+Adjust the sliders, model, or format, and click **Repeat with different settings** at the top right of Previous message. Repeat uses the stored message and current settings, keeps the original realm and question count, and leaves any draft in Current message untouched. Previous message is read-only, including after the last interaction.
 
 The interface shows provider-reported token usage, session totals, request counts, response time, and token-limit status. Missing metadata is shown as unavailable. Account balance is currently unavailable because a working gateway balance endpoint has not been verified.
 

@@ -157,7 +157,7 @@ class WindowTest(unittest.TestCase):
         self.window.send_button.configure.assert_called_with(state="disabled")
         for slider in self.window.parameter_sliders.values():
             slider.configure.assert_called_with(state="normal")
-        self.window.previous_message_box.configure.assert_called_with(state="normal")
+        self.window.previous_message_box.configure.assert_called_with(state="disabled")
         self.root.destroy.assert_not_called()
 
     def test_failed_repeat_preserves_display_and_input(self):

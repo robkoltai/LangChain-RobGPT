@@ -53,7 +53,7 @@
   "statistics_duration_text": "{seconds:.2f} s",
   "statistics_font_size": 10,
   "error_text": "Request failed ({error_type}). Your remaining questions are unchanged. Please try again.",
-  "empty_message_error_text": "Enter text in Current message before Send, or in Previous message before Repeat with different settings.",
+  "empty_message_error_text": "Enter text in Current message before Send. Repeat with different settings reuses the previous submitted message.",
   "parameter_error_text": "Check the {parameter} slider value: it must be a valid number within its configured range. Your remaining questions are unchanged.",
   "response_error_text": "The model response was incomplete or could not be read. Try again, or increase Max tokens. Your remaining questions are unchanged.",
   "token_limit_text": "Maxtokens reached. Response incomplete",
